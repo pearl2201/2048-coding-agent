@@ -158,7 +158,7 @@ if (currentStep == "Breakdown")
 {
     await foreach (var update in poAgent.RunStreamingAsync("""
         Use your file_agent tool to write a complete game design document for 2048 to the file 'document/2048.md'. Do not reply to me until the tool execution returns success
-        """))
+        """, poSession))
     {
         Console.Write(update);
     }
@@ -175,7 +175,7 @@ Console.WriteLine("--- Starting PO <-> Tech Lead design review loop ---");
 while (currentStep == "DesignReview")
 {
     Console.WriteLine("Tech Lead: reviewing document/2048.md...");
-    await foreach (var update in techLead.RunStreamingAsync("Read 'document/2048.md' and review it. If acceptable, write 'accepted' to 'document/2048.review'. Otherwise write 'changes_needed' to 'document/2048.review' and put comments in 'document/2048.comments'. Do not reply until file operations complete."))
+    await foreach (var update in techLead.RunStreamingAsync("Read 'document/2048.md' and review it. If acceptable, write 'accepted' to 'document/2048.review'. Otherwise write 'changes_needed' to 'document/2048.review' and put comments in 'document/2048.comments'. Do not reply until file operations complete.", tlSession))
     {
         Console.Write(update);
     }
@@ -202,7 +202,7 @@ while (currentStep == "DesignReview")
     var comments = ReadFileIfExists(commentsPath);
     Console.WriteLine("PO: updating document based on comments from Tech Lead...");
     var poInstruction = $"Read 'document/2048.comments' and the current 'document/2048.md', apply the requested changes, and overwrite 'document/2048.md' with the improved version. Save a brief changelog to 'document/2048.changelog'. Do not reply until saved.";
-    await foreach (var update in poAgent.RunStreamingAsync(poInstruction))
+    await foreach (var update in poAgent.RunStreamingAsync(poInstruction, poSession))
     {
         Console.Write(update);
     }
@@ -221,7 +221,7 @@ while (currentStep == "CodeImplementation")
     string currentProjectState = GameAgentTool.ScanProjectStructure(Path.Combine(workingPath, "game-2048"));
     // Tech Lead asks for code or reviews latest code status
     Console.WriteLine("Tech Lead: perform a code review on 'game-2048' and write acceptance status to 'game-2048/acceptance.txt' (accepted/changes_needed). If changes needed, write details to 'game-2048/comments.txt'.");
-    await foreach (var update in techLead.RunStreamingAsync($"Current Project State:\n{currentProjectState}\n\nTask: Review the current code in 'game-2048'. If acceptable write 'accepted' to 'game-2048/acceptance.txt'. Otherwise write 'changes_needed' and put review comments in 'game-2048/comments.txt'. Use the file_agent tool only for file reads/writes."))
+    await foreach (var update in techLead.RunStreamingAsync($"Current Project State:\n{currentProjectState}\n\nTask: Review the current code in 'game-2048'. If acceptable write 'accepted' to 'game-2048/acceptance.txt'. Otherwise write 'changes_needed' and put review comments in 'game-2048/comments.txt'. Use the file_agent tool only for file reads/writes.", tlSession))
     {
         Console.Write(update);
     }
@@ -239,7 +239,7 @@ while (currentStep == "CodeImplementation")
     // Phaser developer scans project and implements requested changes
     Console.WriteLine("Phaser Dev: scanning 'game-2048' and applying requested changes...");
     currentProjectState = GameAgentTool.ScanProjectStructure(Path.Combine(workingPath, "game-2048"));
-    await foreach (var update in phaserDev.RunStreamingAsync("Current Project State:\n{currentProjectState}\n\nTask: List files in 'game-2048', then read 'game-2048/comments.txt' and implement the requested changes. After changes, write 'game-2048/code_status.txt' with 'ready_for_review' and a short 'game-2048/summary.txt' describing what you changed."))
+    await foreach (var update in phaserDev.RunStreamingAsync("Current Project State:\n{currentProjectState}\n\nTask: List files in 'game-2048', then read 'game-2048/comments.txt' and implement the requested changes. After changes, write 'game-2048/code_status.txt' with 'ready_for_review' and a short 'game-2048/summary.txt' describing what you changed.", devSession))
     {
         Console.Write(update);
     }
