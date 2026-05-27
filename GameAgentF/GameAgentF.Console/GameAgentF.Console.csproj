@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Ater.DeepSeek.Core" Version="1.4.1" />
     <PackageReference Include="Microsoft.Agents.AI" Version="1.7.0" />
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.7.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.8" />

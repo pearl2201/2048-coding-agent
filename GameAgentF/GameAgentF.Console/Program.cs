@@ -43,6 +43,7 @@ AIFunction scanProjectFunction = AIFunctionFactory.Create(GameAgentTool.ScanProj
 
 
 var chatClient = togetherClient.GetChatClient("MiniMaxAI/MiniMax-M2.7");
+var coderClient = togetherClient.GetChatClient("Qwen/Qwen3.5-397B-A17B");
 var file_agent = new ChatClientAgent(chatClient.AsIChatClient(),
     instructions: """
         You are a specialized file utility agent with direct access to the local filesystem.
@@ -78,7 +79,7 @@ Directory.CreateDirectory(Path.Combine(workingPath, "document"));
 Directory.CreateDirectory(Path.Combine(workingPath, "game-2048"));
 
 // Create Tech Lead agent
-var techLead = new ChatClientAgent(chatClient.AsIChatClient(),
+var techLead = new ChatClientAgent(coderClient.AsIChatClient(),
     instructions: """
         You are a senior Tech Lead who reviews game design documents and code deliverables.
         Your working folders: 'document' for design docs and 'game-2048' for code.
@@ -95,7 +96,7 @@ var techLead = new ChatClientAgent(chatClient.AsIChatClient(),
     tools: [scanProjectFunction, fileAgentTool]);
 
 // Create Phaser Developer agent
-var phaserDev = new ChatClientAgent(chatClient.AsIChatClient(),
+var phaserDev = new ChatClientAgent(coderClient.AsIChatClient(),
     instructions: """
         You are a Phaser developer working in the 'game-2048' folder using Phaser 4 + Vite.
         
@@ -130,7 +131,7 @@ AgentSession devSession = await phaserDev.CreateSessionAsync();
 
 
 int currentCycle = 0;
-string currentStep = "DesignReview";
+string currentStep = "Breakdown";
 string feedback = "";
 
 // 2. RECOVERY INTERCEPTOR: If a checkpoint exists on disk, re-hydrate all agents
@@ -168,57 +169,56 @@ if (currentStep == "Breakdown")
     );
 }
 
-if (!File.Exists(Path.Combine(workingPath, "document", "2048.review")))
+
+// 1) Loop: PO <-> Tech Lead until design doc accepted
+Console.WriteLine("--- Starting PO <-> Tech Lead design review loop ---");
+while (currentStep == "DesignReview")
 {
-    // 1) Loop: PO <-> Tech Lead until design doc accepted
-    Console.WriteLine("--- Starting PO <-> Tech Lead design review loop ---");
-    while (currentStep == "DesignReview")
+    Console.WriteLine("Tech Lead: reviewing document/2048.md...");
+    await foreach (var update in techLead.RunStreamingAsync("Read 'document/2048.md' and review it. If acceptable, write 'accepted' to 'document/2048.review'. Otherwise write 'changes_needed' to 'document/2048.review' and put comments in 'document/2048.comments'. Do not reply until file operations complete."))
     {
-        Console.WriteLine("Tech Lead: reviewing document/2048.md...");
-        await foreach (var update in techLead.RunStreamingAsync("Read 'document/2048.md' and review it. If acceptable, write 'accepted' to 'document/2048.review'. Otherwise write 'changes_needed' to 'document/2048.review' and put comments in 'document/2048.comments'. Do not reply until file operations complete."))
-        {
-            Console.Write(update);
-        }
+        Console.Write(update);
+    }
 
-        var reviewPath = Path.Combine(workingPath, "document", "2048.review");
-        var review = ReadFileIfExists(reviewPath);
-        Console.WriteLine($"Tech Lead review result: {review}");
-        if (review.Equals("accepted", StringComparison.OrdinalIgnoreCase))
-        {
-            Console.WriteLine("Design document accepted by Tech Lead.");
-            // Advance structural state to the coding phase
-            currentStep = "CodeImplementation";
+    var reviewPath = Path.Combine(workingPath, "document", "2048.review");
+    var review = ReadFileIfExists(reviewPath);
+    Console.WriteLine($"Tech Lead review result: {review}");
+    if (review.Equals("accepted", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine("Design document accepted by Tech Lead.");
+        // Advance structural state to the coding phase
+        currentStep = "CodeImplementation";
 
-            // SAVE POINT: Checkpoint progress before moving to the code loop
-            await SessionRecoveryManager.SaveTeamStateAsync(
-                checkpointPath, currentCycle, currentStep, feedback,
-                poAgent, poSession, phaserDev, devSession, techLead, tlSession
-            );
-            break;
-        }
-
-        // Tech Lead requested changes: let the PO agent update the document using comments
-        var commentsPath = Path.Combine(workingPath, "document", "2048.comments");
-        var comments = ReadFileIfExists(commentsPath);
-        Console.WriteLine("PO: updating document based on comments from Tech Lead...");
-        var poInstruction = $"Read 'document/2048.comments' and the current 'document/2048.md', apply the requested changes, and overwrite 'document/2048.md' with the improved version. Save a brief changelog to 'document/2048.changelog'. Do not reply until saved.";
-        await foreach (var update in poAgent.RunStreamingAsync(poInstruction))
-        {
-            Console.Write(update);
-        }
-
+        // SAVE POINT: Checkpoint progress before moving to the code loop
         await SessionRecoveryManager.SaveTeamStateAsync(
             checkpointPath, currentCycle, currentStep, feedback,
             poAgent, poSession, phaserDev, devSession, techLead, tlSession
         );
-        Console.WriteLine("PO: update complete — looping back to Tech Lead for another review.");
+        break;
     }
+
+    // Tech Lead requested changes: let the PO agent update the document using comments
+    var commentsPath = Path.Combine(workingPath, "document", "2048.comments");
+    var comments = ReadFileIfExists(commentsPath);
+    Console.WriteLine("PO: updating document based on comments from Tech Lead...");
+    var poInstruction = $"Read 'document/2048.comments' and the current 'document/2048.md', apply the requested changes, and overwrite 'document/2048.md' with the improved version. Save a brief changelog to 'document/2048.changelog'. Do not reply until saved.";
+    await foreach (var update in poAgent.RunStreamingAsync(poInstruction))
+    {
+        Console.Write(update);
+    }
+
+    await SessionRecoveryManager.SaveTeamStateAsync(
+        checkpointPath, currentCycle, currentStep, feedback,
+        poAgent, poSession, phaserDev, devSession, techLead, tlSession
+    );
+    Console.WriteLine("PO: update complete — looping back to Tech Lead for another review.");
 }
+
 // 2) Loop: Tech Lead <-> Phaser Developer until code accepted
 Console.WriteLine("--- Starting Tech Lead <-> Phaser Developer code review loop ---");
 while (currentStep == "CodeImplementation")
 {
-    string currentProjectState = GameAgentTool.ScanProjectStructure(Path.Combine(workingPath, "document", "game-2048"));
+    string currentProjectState = GameAgentTool.ScanProjectStructure(Path.Combine(workingPath, "game-2048"));
     // Tech Lead asks for code or reviews latest code status
     Console.WriteLine("Tech Lead: perform a code review on 'game-2048' and write acceptance status to 'game-2048/acceptance.txt' (accepted/changes_needed). If changes needed, write details to 'game-2048/comments.txt'.");
     await foreach (var update in techLead.RunStreamingAsync($"Current Project State:\n{currentProjectState}\n\nTask: Review the current code in 'game-2048'. If acceptable write 'accepted' to 'game-2048/acceptance.txt'. Otherwise write 'changes_needed' and put review comments in 'game-2048/comments.txt'. Use the file_agent tool only for file reads/writes."))
@@ -238,7 +238,7 @@ while (currentStep == "CodeImplementation")
 
     // Phaser developer scans project and implements requested changes
     Console.WriteLine("Phaser Dev: scanning 'game-2048' and applying requested changes...");
-    currentProjectState = GameAgentTool.ScanProjectStructure(Path.Combine(workingPath, "document", "game-2048"));
+    currentProjectState = GameAgentTool.ScanProjectStructure(Path.Combine(workingPath, "game-2048"));
     await foreach (var update in phaserDev.RunStreamingAsync("Current Project State:\n{currentProjectState}\n\nTask: List files in 'game-2048', then read 'game-2048/comments.txt' and implement the requested changes. After changes, write 'game-2048/code_status.txt' with 'ready_for_review' and a short 'game-2048/summary.txt' describing what you changed."))
     {
         Console.Write(update);
