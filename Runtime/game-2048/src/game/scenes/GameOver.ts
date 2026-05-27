@@ -17,6 +17,13 @@ export class GameOver extends Scene
     init(data: { score: number })
     {
         this.finalScore = data.score || 0;
+        
+        // Save high score if it's a new record
+        const savedHighScore = localStorage.getItem('2048_highscore');
+        const currentHigh = savedHighScore ? parseInt(savedHighScore) : 0;
+        if (this.finalScore > currentHigh) {
+            localStorage.setItem('2048_highscore', this.finalScore.toString());
+        }
     }
 
     create ()
@@ -25,7 +32,6 @@ export class GameOver extends Scene
         this.camera.setBackgroundColor(0x1a2e);
         // Semi-transparent background overlay
         this.add.rectangle(512, 384, 1024, 768, 0x000000, 0.7);
-
         this.gameover_text = this.add.text(512, 200, 'GAME OVER', {
             fontFamily: 'Arial Black', fontSize: 64, color: '#ffffff',
             stroke: '#000000', strokeThickness: 8,
@@ -50,6 +56,7 @@ export class GameOver extends Scene
         this.restart_text.on('pointerover', () => {
             this.restart_text.setColor('#ffff00');
         });
+
 
         this.restart_text.on('pointerout', () => {
             this.restart_text.setColor('#ffffff');

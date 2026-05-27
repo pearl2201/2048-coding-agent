@@ -10,7 +10,6 @@ export class MainMenu extends Scene
     instructionsText: GameObjects.Text;
 
     private highScore: number = 0;
-
     constructor ()
     {
         super('MainMenu');
@@ -20,7 +19,9 @@ export class MainMenu extends Scene
     {
         this.background = this.add.image(512, 384, 'background');
 
+
         this.logo = this.add.image(512, 200, 'logo');
+
 
         this.title = this.add.text(512, 320, '2048', {
             fontFamily: 'Arial Black', fontSize: 80, color: '#ffffff',
@@ -42,7 +43,6 @@ export class MainMenu extends Scene
             fontFamily: 'Arial', fontSize: 24, color: '#aaaaaa',
             align: 'center'
         }).setOrigin(0.5);
-
         this.instructionsText = this.add.text(512, 520, 'Use Arrow Keys or Swipe to Play\nClick to Start', {
             fontFamily: 'Arial', fontSize: 20, color: '#cccccc',
             align: 'center'
@@ -52,7 +52,6 @@ export class MainMenu extends Scene
             this.scene.start('Game');
         });
     }
-
     updateHighScore(score: number)
     {
         if (score > this.highScore)

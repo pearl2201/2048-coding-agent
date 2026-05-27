@@ -7,6 +7,11 @@ using ModelContextProtocol.Client;
 using OpenAI;
 using OpenAI.Chat;
 using System.ClientModel;
+using System.Text.Json;
+using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
+
+
+
 IConfiguration config = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory()) // Requires Microsoft.Extensions.Configuration.Json
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
@@ -27,53 +32,14 @@ await using var mcpClient = await McpClient.CreateAsync(new StdioClientTransport
 {
     Name = "MCPServer",
     Command = "npx",
-    Arguments = ["-y", "--verbose", "@modelcontextprotocol/server-filesystem", config["WorkingPath"]],
+    Arguments = ["-y", "--verbose", "github:a13-team/filesystem-mcp-ignore", "-i", ".gitignore,.cursorignore", config["WorkingPath"]],
 }));
 var mcpTools = await mcpClient.ListToolsAsync().ConfigureAwait(false);
 Console.WriteLine("Hello! I'm a simple AI assistant powered by Gemini 3.0 and the Microsoft Agent Framework.");
 Console.WriteLine("Chat with me! Type 'exit' or 'quit' to end the conversation.\n");
 var mcpToolsResult = await mcpClient.ListToolsAsync().ConfigureAwait(false);
-var secureAgentTools = new List<AITool>();
 
-foreach (var mcpTool in mcpToolsResult)
-{
-    // Bypassing search_files completely prevents the 'query' argument crash we saw earlier
-    if (mcpTool.Name == "list_directory") continue;
-
-    // Convert raw tool to Microsoft.Extensions.AI base tool
-    var baseTool = (AITool)mcpTool;
-}
-
-// // Wrap the tool in a strict defensive runtime validator
-// secureAgentTools.Add(AIFunctionFactory.Create(async (arguments, cancellationToken) =>
-//     {
-//         // Scan all incoming tool string arguments for forbidden keywords
-//         foreach (var kvp in arguments)
-//         {
-//             string? argumentValue = kvp.Value?.ToString();
-//             if (!string.IsNullOrEmpty(argumentValue) &&
-//                 (argumentValue.Contains("node_modules", StringComparison.OrdinalIgnoreCase) ||
-//                  argumentValue.Contains("node_modules/")))
-//             {
-//                 // INTERCEPTED: Block execution and return a descriptive correction to the model
-//                 Console.ForegroundColor = ConsoleColor.Red;
-//                 Console.WriteLine($"\n🛡️ [Interceptor Blocked Tool Call]: '{baseTool.Metadata.Name}' attempted to access 'node_modules'.");
-//                 Console.ResetColor();
-
-//                 return new AIToolResult(
-//                     "Error: Access denied. The 'node_modules' folder is completely locked down. " +
-//                     "Please alter your path parameter targets to search inside 'src/' or 'game-2048/' source files only."
-//                 );
-//             }
-//         }
-
-//         // Path is clear -> execute the original file system tool operation safely
-//         return await mcpTool.ExecuteAsync(arguments, cancellationToken);
-//     },
-//      name: mcpTool.Name,
-//     description: mcpTool.Description,
-
-// ));
+AIFunction scanProjectFunction = AIFunctionFactory.Create(GameAgentTool.ScanProjectStructure);
 
 
 var chatClient = togetherClient.GetChatClient("MiniMaxAI/MiniMax-M2.7");
@@ -88,7 +54,7 @@ var file_agent = new ChatClientAgent(chatClient.AsIChatClient(),
         - You are strictly FORBIDDEN from interacting with any folder named 'node_modules'. 
         - If a child agent or master agent asks you to list or search a path inside 'node_modules', intercept the call and return a text message stating that 'node_modules' is omitted for optimization.
         """,
-     tools: [.. mcpTools.Cast<AITool>()]);
+     tools: [scanProjectFunction, .. mcpTools.Cast<AITool>()]);
 // 2. CORRECT FIX: Force a beautiful tool name and schema description for the master model to read!
 var toolOptions = new AIFunctionFactoryOptions
 {
@@ -97,14 +63,14 @@ var toolOptions = new AIFunctionFactoryOptions
 };
 
 AITool fileAgentTool = file_agent.AsAIFunction(toolOptions);
-var agent = new ChatClientAgent(chatClient.AsIChatClient(),
+var poAgent = new ChatClientAgent(chatClient.AsIChatClient(),
                             instructions: """
                                     You are an AI Product Owner. Your job is to manage features and author design documents.
                                     CRITICAL: You do not have direct file access. You MUST call your 'file_agent' tool to save, write, list, or read any file.
                                     If the user asks to save a file, you have NOT completed the task until you successfully trigger the file_agent tool function call. 
                                     Your working directory root folder is 'document'.
                                     """,
-                              tools: [fileAgentTool]);
+                              tools: [scanProjectFunction, fileAgentTool]);
 
 
 // Prepare folders under configured working path
@@ -126,7 +92,7 @@ var techLead = new ChatClientAgent(chatClient.AsIChatClient(),
         When you request changes, write 'changes_needed' to 'document/2048.review' and save feedback to 'document/2048.comments'.
         When you accept code, write 'accepted' to 'game-2048/acceptance.txt'. Otherwise write 'changes_needed' and put comments in 'game-2048/comments.txt'
         """,
-    tools: [fileAgentTool]);
+    tools: [scanProjectFunction, fileAgentTool]);
 
 // Create Phaser Developer agent
 var phaserDev = new ChatClientAgent(chatClient.AsIChatClient(),
@@ -142,7 +108,7 @@ var phaserDev = new ChatClientAgent(chatClient.AsIChatClient(),
         When ready for review, write 'ready_for_review' to 'game-2048/code_status.txt' and include a short summary file 'game-2048/summary.txt'.
         Use the 'file_agent' tool for all file reads/writes.
         """,
-    tools: [fileAgentTool]);
+    tools: [scanProjectFunction, fileAgentTool]);
 
 // Helper to synchronously read small review files produced by agents
 string ReadFileIfExists(string path)
@@ -151,21 +117,62 @@ string ReadFileIfExists(string path)
     return string.Empty;
 }
 
-AgentSession agentSession = await agent.CreateSessionAsync();
-if (!File.Exists(Path.Combine(workingPath, "document", "2048.md")))
+
+// Try to recover from a previous crash
+var checkpoint = await SessionRecoveryManager.LoadCheckpointAsync();
+
+
+string checkpointPath = Path.Combine(workingPath, "agent_team_checkpoint.json");
+// 1. Instantiate the fresh foundational sessions
+AgentSession poSession = await poAgent.CreateSessionAsync();
+AgentSession tlSession = await techLead.CreateSessionAsync();
+AgentSession devSession = await phaserDev.CreateSessionAsync();
+
+
+int currentCycle = 0;
+string currentStep = "DesignReview";
+string feedback = "";
+
+// 2. RECOVERY INTERCEPTOR: If a checkpoint exists on disk, re-hydrate all agents
+if (File.Exists(checkpointPath))
 {
-    await foreach (var update in agent.RunStreamingAsync("""
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine("♻️ Previous session crash detected! Restoring historical context data...");
+    Console.ResetColor();
+
+    string jsonPayload = await File.ReadAllTextAsync(checkpointPath);
+    var savedState = JsonSerializer.Deserialize<TeamSessionState>(jsonPayload)!;
+
+    currentCycle = savedState.CurrentCycle;
+    currentStep = savedState.CurrentStep;
+    feedback = savedState.LastFeedback;
+
+    // Re-hydrate the individual session histories using the specific agent instances
+    poSession = await poAgent.DeserializeSessionAsync(savedState.ProductOwnerSessionJson);
+    tlSession = await techLead.DeserializeSessionAsync(savedState.TechLeadSessionJson);
+    devSession = await phaserDev.DeserializeSessionAsync(savedState.DeveloperSessionJson);
+}
+
+if (currentStep == "Breakdown")
+{
+    await foreach (var update in poAgent.RunStreamingAsync("""
         Use your file_agent tool to write a complete game design document for 2048 to the file 'document/2048.md'. Do not reply to me until the tool execution returns success
         """))
     {
         Console.Write(update);
     }
+    currentStep = "DesignReview";
+    await SessionRecoveryManager.SaveTeamStateAsync(
+        checkpointPath, currentCycle, currentStep, feedback,
+        poAgent, poSession, phaserDev, devSession, techLead, tlSession
+    );
 }
+
 if (!File.Exists(Path.Combine(workingPath, "document", "2048.review")))
 {
     // 1) Loop: PO <-> Tech Lead until design doc accepted
     Console.WriteLine("--- Starting PO <-> Tech Lead design review loop ---");
-    while (true)
+    while (currentStep == "DesignReview")
     {
         Console.WriteLine("Tech Lead: reviewing document/2048.md...");
         await foreach (var update in techLead.RunStreamingAsync("Read 'document/2048.md' and review it. If acceptable, write 'accepted' to 'document/2048.review'. Otherwise write 'changes_needed' to 'document/2048.review' and put comments in 'document/2048.comments'. Do not reply until file operations complete."))
@@ -179,6 +186,14 @@ if (!File.Exists(Path.Combine(workingPath, "document", "2048.review")))
         if (review.Equals("accepted", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine("Design document accepted by Tech Lead.");
+            // Advance structural state to the coding phase
+            currentStep = "CodeImplementation";
+
+            // SAVE POINT: Checkpoint progress before moving to the code loop
+            await SessionRecoveryManager.SaveTeamStateAsync(
+                checkpointPath, currentCycle, currentStep, feedback,
+                poAgent, poSession, phaserDev, devSession, techLead, tlSession
+            );
             break;
         }
 
@@ -187,20 +202,26 @@ if (!File.Exists(Path.Combine(workingPath, "document", "2048.review")))
         var comments = ReadFileIfExists(commentsPath);
         Console.WriteLine("PO: updating document based on comments from Tech Lead...");
         var poInstruction = $"Read 'document/2048.comments' and the current 'document/2048.md', apply the requested changes, and overwrite 'document/2048.md' with the improved version. Save a brief changelog to 'document/2048.changelog'. Do not reply until saved.";
-        await foreach (var update in agent.RunStreamingAsync(poInstruction))
+        await foreach (var update in poAgent.RunStreamingAsync(poInstruction))
         {
             Console.Write(update);
         }
+
+        await SessionRecoveryManager.SaveTeamStateAsync(
+            checkpointPath, currentCycle, currentStep, feedback,
+            poAgent, poSession, phaserDev, devSession, techLead, tlSession
+        );
         Console.WriteLine("PO: update complete — looping back to Tech Lead for another review.");
     }
 }
 // 2) Loop: Tech Lead <-> Phaser Developer until code accepted
 Console.WriteLine("--- Starting Tech Lead <-> Phaser Developer code review loop ---");
-while (true)
+while (currentStep == "CodeImplementation")
 {
+    string currentProjectState = GameAgentTool.ScanProjectStructure(Path.Combine(workingPath, "document", "game-2048"));
     // Tech Lead asks for code or reviews latest code status
     Console.WriteLine("Tech Lead: perform a code review on 'game-2048' and write acceptance status to 'game-2048/acceptance.txt' (accepted/changes_needed). If changes needed, write details to 'game-2048/comments.txt'.");
-    await foreach (var update in techLead.RunStreamingAsync("Review the current code in 'game-2048'. If acceptable write 'accepted' to 'game-2048/acceptance.txt'. Otherwise write 'changes_needed' and put review comments in 'game-2048/comments.txt'. Use the file_agent tool only for file reads/writes."))
+    await foreach (var update in techLead.RunStreamingAsync($"Current Project State:\n{currentProjectState}\n\nTask: Review the current code in 'game-2048'. If acceptable write 'accepted' to 'game-2048/acceptance.txt'. Otherwise write 'changes_needed' and put review comments in 'game-2048/comments.txt'. Use the file_agent tool only for file reads/writes."))
     {
         Console.Write(update);
     }
@@ -211,17 +232,24 @@ while (true)
     if (acceptance.Equals("accepted", StringComparison.OrdinalIgnoreCase))
     {
         Console.WriteLine("Phaser code accepted by Tech Lead. Loop complete.");
+        if (File.Exists(checkpointPath)) File.Delete(checkpointPath);
         break;
     }
 
     // Phaser developer scans project and implements requested changes
     Console.WriteLine("Phaser Dev: scanning 'game-2048' and applying requested changes...");
-    await foreach (var update in phaserDev.RunStreamingAsync("List files in 'game-2048', then read 'game-2048/comments.txt' and implement the requested changes. After changes, write 'game-2048/code_status.txt' with 'ready_for_review' and a short 'game-2048/summary.txt' describing what you changed."))
+    currentProjectState = GameAgentTool.ScanProjectStructure(Path.Combine(workingPath, "document", "game-2048"));
+    await foreach (var update in phaserDev.RunStreamingAsync("Current Project State:\n{currentProjectState}\n\nTask: List files in 'game-2048', then read 'game-2048/comments.txt' and implement the requested changes. After changes, write 'game-2048/code_status.txt' with 'ready_for_review' and a short 'game-2048/summary.txt' describing what you changed."))
     {
         Console.Write(update);
     }
 
     Console.WriteLine("Phaser Dev: changes applied, asking Tech Lead to re-review.");
+
+    await SessionRecoveryManager.SaveTeamStateAsync(
+        checkpointPath, currentCycle, currentStep, feedback,
+        poAgent, poSession, phaserDev, devSession, techLead, tlSession
+    );
 }
 
 Console.WriteLine("All loops complete. Exiting.");
