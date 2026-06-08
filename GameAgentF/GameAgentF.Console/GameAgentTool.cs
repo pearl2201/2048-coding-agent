@@ -9,11 +9,20 @@ using System.ClientModel;
 using System.ComponentModel;
 public static class GameAgentTool
 {
+    public static string WorkingDirectory { get; set; }
     // Define a native high-speed project scanner tool
     [Description("Quickly scans the structure of the project directories to give the agent an immediate map of the files, bypassing node_modules.")]
-    public static string ScanProjectStructure([Description("The project root directory path.")]string workingPath)
+    public static string ScanProjectStructure([Description("The project root directory path.")] string workingPath)
     {
         var sb = new StringBuilder();
+        if (workingPath == "." || workingPath == "/")
+        {
+            workingPath = WorkingDirectory;
+        }
+        else if (!workingPath.StartsWith("D:"))
+        {
+            workingPath = Path.Combine(WorkingDirectory, workingPath);
+        }
         var root = new DirectoryInfo(workingPath);
 
         // Quick structural mapping function

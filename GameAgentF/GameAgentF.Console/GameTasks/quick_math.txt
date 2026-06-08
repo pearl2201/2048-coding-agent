@@ -1,0 +1,3 @@
+﻿Use your file_agent tool to write a complete game design document for quick-math to the file 'document/quick-math.md'.
+A game should show a simple match problem to user. And provide a three options for answer. User should select the correct answer within 10 seconds. If user select the correct answer, they will get 1 point. If user select the wrong answer or time is up, they will lose 1 point. 
+The game will continue until end of time. At the end of the game, show the total score to user.

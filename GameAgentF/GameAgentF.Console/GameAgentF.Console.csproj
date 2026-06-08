@@ -8,7 +8,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Ater.DeepSeek.Core" Version="1.4.1" />
+    <None Remove="GameTasks\quick_math.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="GameTasks\quick_math.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+
     <PackageReference Include="Microsoft.Agents.AI" Version="1.7.0" />
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.7.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.8" />
@@ -17,6 +27,8 @@
     <PackageReference Include="GeminiDotnet.Extensions.AI" Version="0.25.0" />
     <PackageReference Include="ModelContextProtocol" Version="1.3.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
+    <PackageReference Include="DeepSeek.Agents.AI" Version="1.0.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.8.0" />
   </ItemGroup>
 
   <ItemGroup>
