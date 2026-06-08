@@ -93,7 +93,7 @@ CheckpointManager checkpointManager = CheckpointManager.CreateInMemory();
 
 WorkflowBuilder builder = new(poAgent.Agent); // Set starting executor
 builder.AddEdge(poAgent.Agent, techLeadAgent.Agent);
-builder.AddEdge(techLeadAgent.Agent, juniorDevAgent.Agent);
+builder.AddEdge<string>(techLeadAgent.Agent, juniorDevAgent.Agent, (x) => true);
 
 var workflow = builder.Build();
 

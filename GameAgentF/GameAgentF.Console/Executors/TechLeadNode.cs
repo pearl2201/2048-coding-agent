@@ -26,9 +26,9 @@ namespace GameAgentF.Console.Executors
         1. Completely IGNORE the 'node_modules' folder. Do not try to read, open, list, or scan any path containing 'node_modules'.
         2. Focus exclusively on original project source files (e.g., HTML, CSS, JS, TS, or JSON configuration structures).
         
-        When you accept a design document, write the single word 'accepted' to 'document/quick-math.review'.
-        When you request changes, write 'changes_needed' to 'document/quick-math.review' and save feedback to 'document/quick-math.comments'.
-        When you accept code, write 'accepted' to 'game-quick-math/acceptance.txt'. Otherwise write 'changes_needed' and put comments in 'game-quick-math/comments.txt'
+        When you accept a design document, write the single word 'accepted' to 'document/quick-math.review', reply with 'APPROVED'.
+        When you request changes, write 'changes_needed' to 'document/quick-math.review' and save feedback to 'document/quick-math.comments', reply with 'APPROVED'.
+        When you accept code, write 'accepted' to 'game-quick-math/acceptance.txt'. Otherwise write 'changes_needed' and put comments in 'game-quick-math/comments.txt', provide detailed feedback on what to fix.
         """,
                tools: tools);
         }
